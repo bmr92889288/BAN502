@@ -1,0 +1,165 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+## Course Project Phase 1
+## Sabrina Fleming
+## Beth Rusterholz
+
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(mice)
+library(VIM)
+library(ranger)
+library(skimr)
+library(caret)
+library(GGally)
+library(gridExtra)
+library(vip)
+library(randomForest)
+```
+
+```{r}
+house = read_csv("~/BAN 502/Module 5/Final Project/ames_student.csv")
+```
+
+```{r}
+str(house)
+summary(house)
+```
+
+Convert all character variables to factors
+
+```{r}
+house = house %>% mutate_if(is.character, as_factor)
+```
+
+
+Check for missing data
+
+```{r}
+skim(house)
+```
+
+Now we's split the data
+
+```{r}
+set.seed(123)
+house_split = initial_split(house, prop = 0.7, strata = Above_Median)
+train = training(house_split)
+test = testing(house_split)
+```
+
+Set up our folds for cross-validation
+
+```{r}
+set.seed(123)
+rf_folds = vfold_cv(train, v = 5)
+```
+
+```{r}
+house_recipe = recipe(Above_Median ~ Gr_Liv_Area + Year_Built + First_Flr_SF + Garage_Area + Year_Remod_Add + Total_Bsmt_SF + Garage_Cars + Second_Flr_SF + Full_Bath, train)
+ 
+  rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 100) %>%
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("classification")
+
+house_wflow =
+  workflow() %>%
+  add_model(rf_model) %>%
+  add_recipe(house_recipe)
+
+rf_grid = grid_regular(
+  mtry(range = c(2,8)),
+  min_n(range = c(2,40))
+)
+
+set.seed(123)
+rf_res_tuned = tune_grid(
+  house_wflow,
+  resamples = rf_folds,
+  grid = rf_grid
+)
+```
+
+```{r}
+rf_res_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  select(mean, min_n, mtry) %>%
+  select(mean, min_n, mtry) %>%
+  pivot_longer(min_n:mtry,
+     values_to = "value",
+     names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "Accuracy")
+```
+
+
+An alternate view of the parameters
+
+
+```{r}
+rf_res_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  mutate(min_n = factor(min_n)) %>%
+  ggplot(aes(mtry, mean, color = min_n)) +
+  geom_line(alpha = 0.5, size = 1.5) +
+  geom_point() +
+  labs(y = "Accuracy")
+```
+
+```{r}
+best_rf = select_best(rf_res_tuned, "accuracy")
+
+final_rf = finalize_workflow(
+  house_wflow,
+  best_rf
+)
+
+final_rf
+```
+
+```{r}
+final_rf_fit = fit(final_rf, train)
+```
+
+Variable of Importance
+
+```{r}
+final_rf_fit %>% pull_workflow_fit() %>% vip(geom = "point")
+```
+
+The most important variable is nGr_Liv_Area. The least important is the Overall_Qual_Average.
+
+
+Predictions on train
+
+```{r}
+trainpredrf = predict(final_rf_fit, train)
+head(trainpredrf)
+```
+
+Confusion Matrix
+
+```{r}
+confusionMatrix(trainpredrf$.pred_class, train$Above_Median, positive = "Yes")
+```
+
+Predictions on test
+
+```{r}
+testpredrf = predict(final_rf_fit, test)
+head(testpredrf)
+confusionMatrix(testpredrf$.pred_class, test$Above_Median)
+```
+
+
+
